@@ -6,21 +6,52 @@ const loading = ref(false);
 const success = ref(false);
 const email = ref("");
 const password = ref("");
-const isRegister = ref(false);
+const mode = ref("login"); // login, register, forgot, resend
 const errorMsg = ref("");
 const telegramUrl = ref("");
-const telegramWebUrl = ref("");
+const resendSuccess = ref("");
+const showResend = ref(false);
+const honeypot = ref("");
+let navigationTimeout = null;
+
+const generateTelegramLinks = (userId) => {
+  const exp = Math.floor((Date.now() + 5 * 60 * 1000) / 1000);
+  const rawToken = `${userId}:${exp}`;
+  const safeToken = btoa(rawToken)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  telegramUrl.value = `https://t.me/tempPruebaBot?start=${safeToken}`;
+  telegramWebUrl.value = `https://web.telegram.org/k/#@tempPruebaBot?start=${safeToken}`;
+};
 
 const handleAuth = async () => {
+  if (loading.value || honeypot.value) return;
   try {
     loading.value = true;
+    // Anti-bot artificial delay (0.5s)
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     errorMsg.value = "";
+    resendSuccess.value = "";
+    if (navigationTimeout) clearTimeout(navigationTimeout);
+
+    if (mode.value === "forgot") {
+      await handleForgotPassword();
+      return;
+    }
+
+    if (mode.value === "resend") {
+      await handleResendEmail();
+      return;
+    }
 
     if (password.value.length < 6) {
       throw new Error("La contraseña debe tener al menos 6 caracteres.");
     }
 
-    if (isRegister.value) {
+    if (mode.value === "register") {
       const { error } = await supabase.auth.signUp({
         email: email.value,
         password: password.value,
@@ -33,7 +64,7 @@ const handleAuth = async () => {
         }
         throw error;
       }
-      alert("Registro Clínico exitoso. Revisa tu email para confirmar.");
+      resendSuccess.value = "Registro Clínico exitoso. Revisa tu email para confirmar.";
     } else {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.value,
@@ -41,27 +72,18 @@ const handleAuth = async () => {
       });
 
       if (error) {
-        if (error.message.includes("Invalid login credentials")) {
+        if (error.message.toLowerCase().includes("invalid login credentials")) {
           throw new Error("Correo o contraseña incorrectos.");
         }
-        if (error.message.includes("Email not confirmed")) {
+        if (error.message.toLowerCase().includes("email not confirmed")) {
+          showResend.value = true;
           throw new Error(
             "Por favor, confirma tu correo electrónico antes de entrar.",
           );
         }
         throw error;
       }
-
-      const userId = data.user.id;
-      const exp = Math.floor((Date.now() + 5 * 60 * 1000) / 1000);
-      const rawToken = `${userId}:${exp}`;
-      const safeToken = btoa(rawToken)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-
-      telegramUrl.value = `https://t.me/tempPruebaBot?start=${safeToken}`;
-      telegramWebUrl.value = `https://web.telegram.org/k/#@tempPruebaBot?start=${safeToken}`;
+      generateTelegramLinks(data.user.id);
       success.value = true;
     }
   } catch (error) {
@@ -71,9 +93,86 @@ const handleAuth = async () => {
   }
 };
 
-const toggleMode = () => {
-  isRegister.value = !isRegister.value;
+const goBack = () => {
+  if (navigationTimeout) clearTimeout(navigationTimeout);
+  success.value = false;
+  setMode("login");
+};
+
+const setMode = (newMode) => {
+  mode.value = newMode;
   errorMsg.value = "";
+  showResend.value = false;
+  resendSuccess.value = "";
+};
+
+const handleResendEmail = async () => {
+  if (loading.value) return;
+  if (!email.value) {
+    throw new Error("Por favor, ingresa tu correo electrónico primero.");
+  }
+
+  if (navigationTimeout) clearTimeout(navigationTimeout);
+
+  try {
+    loading.value = true;
+    errorMsg.value = "";
+    resendSuccess.value = "";
+
+    // Check for session and populate links if active
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session && session.user.email === email.value) {
+      generateTelegramLinks(session.user.id);
+      resendSuccess.value = "¡Ya estás autenticado con este correo!";
+      navigationTimeout = setTimeout(() => { success.value = true; loading.value = false; }, 1000);
+      return;
+    }
+
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: email.value,
+    });
+
+    if (error) {
+      if (error.message.includes("already confirmed")) {
+        resendSuccess.value = "Este correo ya ha sido confirmado. Puedes iniciar sesión.";
+      } else {
+        throw error;
+      }
+    } else {
+      resendSuccess.value = "Correo de confirmación enviado. Revisa tu bandeja de entrada.";
+    }
+    showResend.value = false;
+  } catch (error) {
+    errorMsg.value = error.message;
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleForgotPassword = async () => {
+  if (loading.value || honeypot.value) return;
+  if (!email.value) {
+    throw new Error("Por favor, ingresa tu correo para restablecer tu contraseña.");
+  }
+  if (navigationTimeout) clearTimeout(navigationTimeout);
+  try {
+    loading.value = true;
+    // Anti-bot artificial delay
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    errorMsg.value = "";
+    resendSuccess.value = "";
+    const { error } = await supabase.auth.resetPasswordForEmail(email.value, {
+      redirectTo: window.location.origin,
+    });
+    if (error) throw error;
+    resendSuccess.value = "Se ha enviado un enlace para restablecer tu contraseña a tu correo.";
+  } catch (error) {
+    errorMsg.value = error.message;
+  } finally {
+    loading.value = false;
+  }
 };
 </script>
 
@@ -155,15 +254,32 @@ const toggleMode = () => {
       <p class="hint">
         "App Telegram" requiere tener Telegram Desktop instalado.
       </p>
+      <button @click="goBack" class="btn btn-outline" style="margin-top: 24px;">
+        Volver al Inicio
+      </button>
     </div>
 
     <div v-else>
-      <h1>{{ isRegister ? "Registro de Paciente" : "Portal Médico" }}</h1>
+      <h1>
+        {{
+          mode === "register"
+            ? "Registro de Paciente"
+            : mode === "forgot"
+              ? "Recuperar Contraseña"
+              : mode === "resend"
+                ? "Reenviar Verificación"
+                : "Portal Médico"
+        }}
+      </h1>
       <p class="subtitle">
         {{
-          isRegister
+          mode === "register"
             ? "Crea tu perfil clínico para acceder al asistente de salud en Telegram."
-            : "Identifícate para sincronizar tus datos con el bot de Telegram."
+            : mode === "forgot"
+              ? "Te enviaremos un enlace para restablecer tu contraseña."
+              : mode === "resend"
+                ? "Te enviaremos un nuevo correo de confirmación."
+                : "Identifícate para sincronizar tus datos con el bot de Telegram."
         }}
       </p>
 
@@ -184,9 +300,40 @@ const toggleMode = () => {
           <line x1="12" y1="16" x2="12.01" y2="16" />
         </svg>
         {{ errorMsg }}
+        <div v-if="showResend" class="resend-container">
+          <button
+            type="button"
+            @click="setMode('resend')"
+            class="btn-link"
+          >
+            Ir a Reenviar correo
+          </button>
+        </div>
+      </div>
+
+      <div v-if="resendSuccess" class="success-msg">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        {{ resendSuccess }}
       </div>
 
       <form @submit.prevent="handleAuth">
+        <!-- Anti-bot Honeypot Field -->
+        <div style="display:none" aria-hidden="true">
+          <input v-model="honeypot" type="text" name="hp_phone_number" tabindex="-1" autocomplete="off" />
+        </div>
+
         <div class="form-group">
           <label>Correo Electrónico</label>
           <input
@@ -197,7 +344,7 @@ const toggleMode = () => {
           />
         </div>
 
-        <div class="form-group">
+        <div v-if="mode === 'login' || mode === 'register'" class="form-group">
           <label>Contraseña de Acceso</label>
           <input
             v-model="password"
@@ -210,7 +357,13 @@ const toggleMode = () => {
         <button class="btn" :disabled="loading">
           <div v-if="loading" class="loader"></div>
           <span v-else>{{
-            isRegister ? "Confirmar Registro" : "Acceder al Portal"
+            mode === "register"
+              ? "Confirmar Registro"
+              : mode === "forgot"
+                ? "Enviar Enlace"
+                : mode === "resend"
+                  ? "Reenviar Correo"
+                  : "Acceder al Portal"
           }}</span>
           <svg
             v-if="!loading"
@@ -231,11 +384,29 @@ const toggleMode = () => {
         </button>
       </form>
 
-      <p class="toggle-mode">
-        {{ isRegister ? "¿Ya eres usuario?" : "¿Nuevo paciente?" }}
-        <span @click="toggleMode">{{
-          isRegister ? "Iniciar Sesión" : "Registrarse ahora"
+      <p v-if="mode === 'login' || mode === 'register'" class="toggle-mode">
+        {{ mode === "register" ? "¿Ya eres usuario?" : "¿Nuevo paciente?" }}
+        <span @click="setMode(mode === 'register' ? 'login' : 'register')">{{
+          mode === "register" ? "Iniciar Sesión" : "Registrarse ahora"
         }}</span>
+      </p>
+
+      <div v-if="mode === 'login'" class="navigation-links">
+        <p class="toggle-mode small">
+          <span @click="setMode('forgot')">¿Olvidaste tu contraseña?</span>
+        </p>
+      </div>
+
+      <div v-if="mode === 'register'" class="navigation-links">
+        <p class="toggle-mode small">
+          ¿No recibiste el correo?
+          <span @click="setMode('resend')">Reenviar verificación</span>
+        </p>
+      </div>
+
+      <p v-if="mode === 'forgot' || mode === 'resend'" class="toggle-mode">
+        O regresa al
+        <span @click="setMode('login')">Inicio de Sesión</span>
       </p>
     </div>
   </div>
