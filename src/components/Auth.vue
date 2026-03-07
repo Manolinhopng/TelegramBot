@@ -1,19 +1,71 @@
 <script setup>
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { supabase } from "../lib/supabase";
+
+const props = defineProps({
+  initialMode: { type: String, default: 'login' },
+});
+const emit = defineEmits(['go-landing']);
 
 const loading = ref(false);
 const success = ref(false);
 const email = ref("");
 const password = ref("");
-const mode = ref("login"); // login, register, forgot, resend
+const mode = ref(props.initialMode || "login"); // login, register, forgot, resend
 const errorMsg = ref("");
 const telegramUrl = ref("");
+const telegramWebUrl = ref("");
 const resendSuccess = ref("");
 const showResend = ref(false);
 const honeypot = ref("");
+
+// --- Resend cooldown ---
+const resendCooldown = ref(0);
+let resendTimer = null;
 let navigationTimeout = null;
 
+const startResendCooldown = () => {
+  resendCooldown.value = 60;
+  if (resendTimer) clearInterval(resendTimer);
+  resendTimer = setInterval(() => {
+    resendCooldown.value--;
+    if (resendCooldown.value <= 0) {
+      clearInterval(resendTimer);
+      resendTimer = null;
+    }
+  }, 1000);
+};
+
+const resendButtonLabel = computed(() => {
+  if (loading.value) return null; // spinner shown instead
+  if (resendCooldown.value > 0) return `Espera ${resendCooldown.value}s…`;
+  return "Reenviar Correo";
+});
+
+// --- Email validation ---
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const validateEmail = (val) => {
+  if (!val || !EMAIL_RE.test(val)) {
+    throw new Error("Por favor, ingresa un correo electrónico válido.");
+  }
+};
+
+// --- Secure redirectTo for password reset ---
+const getSecureOrigin = () => {
+  const { protocol, hostname, port } = window.location;
+  // Allow http only for local development
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+  const useHttps = !isLocal;
+  const safeProtocol = useHttps ? "https:" : protocol;
+  const portPart = port ? `:${port}` : "";
+  return `${safeProtocol}//${hostname}${portPart}`;
+};
+
+// --- Telegram deep-link token ---
+// ⚠️ SECURITY NOTE: This token is base64(userId:expiry) — it is NOT cryptographically
+// signed and can be decoded by anyone who sees the URL. It is short-lived (5 min) which
+// limits exposure, but a proper fix requires a server-side HMAC/JWT (Supabase Edge Function).
+// Upgrade when moving to production with real patient data.
 const generateTelegramLinks = (userId) => {
   const exp = Math.floor((Date.now() + 5 * 60 * 1000) / 1000);
   const rawToken = `${userId}:${exp}`;
@@ -27,15 +79,21 @@ const generateTelegramLinks = (userId) => {
 };
 
 const handleAuth = async () => {
-  if (loading.value || honeypot.value) return;
+  // Fix E: honeypot check BEFORE loading state so the spinner never appears for bots
+  if (honeypot.value) return;
+  if (loading.value) return;
+
   try {
     loading.value = true;
     // Anti-bot artificial delay (0.5s)
     await new Promise(resolve => setTimeout(resolve, 500));
-    
+
     errorMsg.value = "";
     resendSuccess.value = "";
     if (navigationTimeout) clearTimeout(navigationTimeout);
+
+    // Fix D: validate email format before hitting the API
+    validateEmail(email.value);
 
     if (mode.value === "forgot") {
       await handleForgotPassword();
@@ -58,13 +116,11 @@ const handleAuth = async () => {
       });
       if (error) {
         if (error.message.includes("at least 6 characters")) {
-          throw new Error(
-            "La contraseña es demasiado corta (mínimo 6 caracteres).",
-          );
+          throw new Error("La contraseña es demasiado corta (mínimo 6 caracteres).");
         }
         throw error;
       }
-      resendSuccess.value = "Registro Clínico exitoso. Revisa tu email para confirmar.";
+      resendSuccess.value = "Registro Clínico exitoso. Revisa tu email para confirmar tu cuenta.";
     } else {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.value,
@@ -106,78 +162,77 @@ const setMode = (newMode) => {
   resendSuccess.value = "";
 };
 
+// Fix B: handleResendEmail no longer manages loading.value itself —
+// it is always called from handleAuth which owns the loading state via finally.
+// The early-return for already-authenticated users now simply sets the state and
+// throws to let the caller's finally block clean up loading.
 const handleResendEmail = async () => {
-  if (loading.value) return;
-  if (!email.value) {
-    throw new Error("Por favor, ingresa tu correo electrónico primero.");
+  errorMsg.value = "";
+  resendSuccess.value = "";
+
+  // Check cooldown
+  if (resendCooldown.value > 0) {
+    throw new Error(`Por favor espera ${resendCooldown.value} segundos antes de volver a enviar.`);
   }
 
-  if (navigationTimeout) clearTimeout(navigationTimeout);
+  // Check for active session with same email
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session && session.user.email === email.value) {
+    generateTelegramLinks(session.user.id);
+    resendSuccess.value = "¡Ya estás autenticado con este correo!";
+    // Small delay so the user reads the message, then show success screen
+    // We set success here and throw a sentinel so the caller finally() still runs
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    success.value = true;
+    return;
+  }
 
-  try {
-    loading.value = true;
-    errorMsg.value = "";
-    resendSuccess.value = "";
+  const { error } = await supabase.auth.resend({
+    type: "signup",
+    email: email.value,
+  });
 
-    // Check for session and populate links if active
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session && session.user.email === email.value) {
-      generateTelegramLinks(session.user.id);
-      resendSuccess.value = "¡Ya estás autenticado con este correo!";
-      navigationTimeout = setTimeout(() => { success.value = true; loading.value = false; }, 1000);
-      return;
-    }
-
-    const { error } = await supabase.auth.resend({
-      type: "signup",
-      email: email.value,
-    });
-
-    if (error) {
-      if (error.message.includes("already confirmed")) {
-        resendSuccess.value = "Este correo ya ha sido confirmado. Puedes iniciar sesión.";
-      } else {
-        throw error;
-      }
+  if (error) {
+    if (error.message.includes("already confirmed")) {
+      resendSuccess.value = "Este correo ya ha sido confirmado. Puedes iniciar sesión.";
+    } else if (
+      error.message.toLowerCase().includes("rate limit") ||
+      error.message.toLowerCase().includes("too many") ||
+      error.status === 429
+    ) {
+      throw new Error("Demasiados intentos. Espera unos minutos antes de volver a enviar el correo.");
     } else {
-      resendSuccess.value = "Correo de confirmación enviado. Revisa tu bandeja de entrada.";
+      throw error;
     }
-    showResend.value = false;
-  } catch (error) {
-    errorMsg.value = error.message;
-  } finally {
-    loading.value = false;
+  } else {
+    resendSuccess.value = "Correo de confirmación enviado. Revisa tu bandeja de entrada (y la carpeta de spam).";
+    startResendCooldown();
   }
+
+  showResend.value = false;
 };
 
+// Fix C: use getSecureOrigin() to ensure https: on production
 const handleForgotPassword = async () => {
-  if (loading.value || honeypot.value) return;
-  if (!email.value) {
-    throw new Error("Por favor, ingresa tu correo para restablecer tu contraseña.");
-  }
-  if (navigationTimeout) clearTimeout(navigationTimeout);
-  try {
-    loading.value = true;
-    // Anti-bot artificial delay
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    errorMsg.value = "";
-    resendSuccess.value = "";
-    const { error } = await supabase.auth.resetPasswordForEmail(email.value, {
-      redirectTo: window.location.origin,
-    });
-    if (error) throw error;
-    resendSuccess.value = "Se ha enviado un enlace para restablecer tu contraseña a tu correo.";
-  } catch (error) {
-    errorMsg.value = error.message;
-  } finally {
-    loading.value = false;
-  }
+  errorMsg.value = "";
+  resendSuccess.value = "";
+
+  const { error } = await supabase.auth.resetPasswordForEmail(email.value, {
+    redirectTo: getSecureOrigin(),
+  });
+  if (error) throw error;
+  resendSuccess.value = "Se ha enviado un enlace para restablecer tu contraseña a tu correo.";
 };
 </script>
 
 <template>
   <div class="auth-container">
+    <!-- Back to landing -->
+    <button class="auth-back-btn" @click="emit('go-landing')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      Volver al inicio
+    </button>
+
     <div class="savia-logo">
       <div class="savia-logo-icon">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -278,7 +333,7 @@ const handleForgotPassword = async () => {
             : mode === "forgot"
               ? "Te enviaremos un enlace para restablecer tu contraseña."
               : mode === "resend"
-                ? "Te enviaremos un nuevo correo de confirmación."
+                ? "Te enviaremos un nuevo correo de confirmación. Revisa también la carpeta de spam."
                 : "Identifícate para sincronizar tus datos con el bot de Telegram."
         }}
       </p>
@@ -354,7 +409,10 @@ const handleForgotPassword = async () => {
           />
         </div>
 
-        <button class="btn" :disabled="loading">
+        <button
+          class="btn"
+          :disabled="loading || (mode === 'resend' && resendCooldown > 0)"
+        >
           <div v-if="loading" class="loader"></div>
           <span v-else>{{
             mode === "register"
@@ -362,7 +420,7 @@ const handleForgotPassword = async () => {
               : mode === "forgot"
                 ? "Enviar Enlace"
                 : mode === "resend"
-                  ? "Reenviar Correo"
+                  ? resendButtonLabel
                   : "Acceder al Portal"
           }}</span>
           <svg
@@ -391,12 +449,18 @@ const handleForgotPassword = async () => {
         }}</span>
       </p>
 
+      <!-- Login: both forgot password AND resend verification visible -->
       <div v-if="mode === 'login'" class="navigation-links">
         <p class="toggle-mode small">
           <span @click="setMode('forgot')">¿Olvidaste tu contraseña?</span>
         </p>
+        <p class="toggle-mode small">
+          ¿No recibiste el correo de confirmación?
+          <span @click="setMode('resend')">Reenviar verificación</span>
+        </p>
       </div>
 
+      <!-- Register: resend link -->
       <div v-if="mode === 'register'" class="navigation-links">
         <p class="toggle-mode small">
           ¿No recibiste el correo?
