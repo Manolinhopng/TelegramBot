@@ -66,6 +66,8 @@ const getSecureOrigin = () => {
 // signed and can be decoded by anyone who sees the URL. It is short-lived (5 min) which
 // limits exposure, but a proper fix requires a server-side HMAC/JWT (Supabase Edge Function).
 // Upgrade when moving to production with real patient data.
+const TELEGRAM_BOT = import.meta.env.VITE_TELEGRAM_BOT_USERNAME;
+
 const generateTelegramLinks = (userId) => {
   const exp = Math.floor((Date.now() + 5 * 60 * 1000) / 1000);
   const rawToken = `${userId}:${exp}`;
@@ -74,8 +76,8 @@ const generateTelegramLinks = (userId) => {
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 
-  telegramUrl.value = `https://t.me/tempPruebaBot?start=${safeToken}`;
-  telegramWebUrl.value = `https://web.telegram.org/k/#@tempPruebaBot?start=${safeToken}`;
+  telegramUrl.value = `https://t.me/${TELEGRAM_BOT}?start=${safeToken}`;
+  telegramWebUrl.value = `https://web.telegram.org/k/#@${TELEGRAM_BOT}?start=${safeToken}`;
 };
 
 const handleAuth = async () => {
