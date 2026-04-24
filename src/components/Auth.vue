@@ -145,6 +145,7 @@ const handleAuth = async () => {
       success.value = true;
     }
   } catch (error) {
+    console.error("Auth error:", error);
     errorMsg.value = error.message;
   } finally {
     loading.value = false;
@@ -165,9 +166,7 @@ const setMode = (newMode) => {
 };
 
 // Fix B: handleResendEmail no longer manages loading.value itself —
-// it is always called from handleAuth which owns the loading state via finally.
-// The early-return for already-authenticated users now simply sets the state and
-// throws to let the caller's finally block clean up loading.
+
 const handleResendEmail = async () => {
   errorMsg.value = "";
   resendSuccess.value = "";
