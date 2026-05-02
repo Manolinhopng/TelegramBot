@@ -76,8 +76,8 @@ const generateTelegramLinks = (userId) => {
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 
-  telegramUrl.value = `https://t.me/${TELEGRAM_BOT}?start=${safeToken}`;
-  telegramWebUrl.value = `https://web.telegram.org/k/#@${TELEGRAM_BOT}?start=${safeToken}`;
+  telegramUrl.value = `https://t.me/${TELEGRAM_BOT}`;
+  telegramWebUrl.value = `https://web.telegram.org/k/#@${TELEGRAM_BOT}`;
 };
 
 const handleAuth = async () => {
