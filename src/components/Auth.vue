@@ -11,7 +11,8 @@ const loading = ref(false);
 const success = ref(false);
 const email = ref("");
 const password = ref("");
-const mode = ref(props.initialMode || "login"); // login, register, forgot, resend
+const confirmPassword = ref("");
+const mode = ref(props.initialMode || "login"); // login, register, forgot, resend, reset
 const errorMsg = ref("");
 const telegramUrl = ref("");
 const telegramWebUrl = ref("");
@@ -104,6 +105,11 @@ const handleAuth = async () => {
 
     if (mode.value === "resend") {
       await handleResendEmail();
+      return;
+    }
+
+    if (mode.value === "reset") {
+      await handleResetPassword();
       return;
     }
 
@@ -224,6 +230,27 @@ const handleForgotPassword = async () => {
   if (error) throw error;
   resendSuccess.value = "Se ha enviado un enlace para restablecer tu contraseña a tu correo.";
 };
+
+const handleResetPassword = async () => {
+  if (password.value !== confirmPassword.value) {
+    throw new Error("Las contraseñas no coinciden.");
+  }
+  if (password.value.length < 6) {
+    throw new Error("La nueva contraseña debe tener al menos 6 caracteres.");
+  }
+
+  const { error } = await supabase.auth.updateUser({
+    password: password.value,
+  });
+
+  if (error) throw error;
+  
+  resendSuccess.value = "Contraseña actualizada con éxito. Ya puedes iniciar sesión.";
+  // After 2 seconds, go back to login
+  setTimeout(() => {
+    setMode("login");
+  }, 2500);
+};
 </script>
 
 <template>
@@ -324,7 +351,9 @@ const handleForgotPassword = async () => {
               ? "Recuperar Contraseña"
               : mode === "resend"
                 ? "Reenviar Verificación"
-                : "Portal Médico"
+                : mode === "reset"
+                  ? "Nueva Contraseña"
+                  : "Portal Médico"
         }}
       </h1>
       <p class="subtitle">
@@ -335,7 +364,9 @@ const handleForgotPassword = async () => {
               ? "Te enviaremos un enlace para restablecer tu contraseña."
               : mode === "resend"
                 ? "Te enviaremos un nuevo correo de confirmación. Revisa también la carpeta de spam."
-                : "Identifícate para sincronizar tus datos con el bot de Telegram."
+                : mode === "reset"
+                  ? "Ingresa tu nueva clave de acceso para recuperar tu cuenta."
+                  : "Identifícate para sincronizar tus datos con el bot de Telegram."
         }}
       </p>
 
@@ -400,12 +431,22 @@ const handleForgotPassword = async () => {
           />
         </div>
 
-        <div v-if="mode === 'login' || mode === 'register'" class="form-group">
-          <label>Contraseña de Acceso</label>
+        <div v-if="mode === 'login' || mode === 'register' || mode === 'reset'" class="form-group">
+          <label>{{ mode === 'reset' ? 'Nueva Contraseña' : 'Contraseña de Acceso' }}</label>
           <input
             v-model="password"
             type="password"
             placeholder="Mínimo 6 caracteres"
+            required
+          />
+        </div>
+
+        <div v-if="mode === 'reset'" class="form-group">
+          <label>Confirmar Nueva Contraseña</label>
+          <input
+            v-model="confirmPassword"
+            type="password"
+            placeholder="Repite tu contraseña"
             required
           />
         </div>
@@ -422,7 +463,9 @@ const handleForgotPassword = async () => {
                 ? "Enviar Enlace"
                 : mode === "resend"
                   ? resendButtonLabel
-                  : "Acceder al Portal"
+                  : mode === "reset"
+                    ? "Actualizar Contraseña"
+                    : "Acceder al Portal"
           }}</span>
           <svg
             v-if="!loading"
