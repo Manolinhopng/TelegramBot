@@ -1001,10 +1001,51 @@ const stats = computed(() => {
 }
 
 /* ── RESPONSIVE ──────────────────────────────── */
+@media (max-width: 992px) {
+  .lp-nav-inner { gap: 16px; }
+  .lp-nav-links { gap: 16px; }
+  .lp-hero-title { font-size: 2.8rem; }
+}
+
 @media (max-width: 768px) {
   .lp-nav-links { display: none; }
   .lp-step-arrow { display: none; }
-  .lp-steps { flex-direction: column; align-items: center; }
-  .lp-step { max-width: 100%; }
+  .lp-steps { flex-direction: column; align-items: center; gap: 24px; }
+  .lp-step { max-width: 100%; width: 100%; }
+  
+  .lp-hero { padding: 64px 20px 48px; }
+  .lp-hero-title { font-size: 2.4rem; }
+  .lp-hero-sub { font-size: 1rem; }
+  
+  .lp-features-grid { gap: 20px; }
+  .lp-feature-card { padding: 28px; }
+  
+  .lp-stats-grid { grid-template-columns: 1fr 1fr; }
+  
+  .lp-nav-inner { padding: 0 16px; }
+  .lp-nav-actions .lp-btn-ghost { display: none; } /* Hide login in nav on mobile, use hero/cta */
+}
+
+@media (max-width: 480px) {
+  .lp-hero-title { font-size: 2rem; }
+  .lp-hero-badge { font-size: 0.75rem; padding: 4px 12px; }
+  
+  .lp-btn-lg { padding: 12px 20px; font-size: 0.95rem; }
+  
+  .lp-stats-grid { grid-template-columns: 1fr; }
+  
+  .lp-hero-mockup { padding: 16px; border-radius: 16px; }
+  .lp-chat-bubble { padding: 10px 14px; font-size: 0.85rem; }
+  
+  .lp-section-header h2 { font-size: 1.6rem; }
+  .lp-section-header { margin-bottom: 32px; }
+  
+  .lp-cta-final h2 { font-size: 1.8rem; }
+  
+  .lp-partner-pill { padding: 6px 14px; font-size: 0.8rem; }
+  
+  .lp-nav-icon { width: 32px; height: 32px; }
+  .lp-nav-logo-text { font-size: 1.15rem; }
 }
 </style>
+
